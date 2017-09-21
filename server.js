@@ -15,7 +15,7 @@ app.use(morgan('common'));
 app.use(bodyParser.json());
 
 mongoose.Promise = global.Promise;
-
+const basicAuth = passport.authenticate('basic', {session: false});
 
 app.get('/posts', (req, res) => {
   BlogPost
@@ -39,12 +39,12 @@ app.get('/posts/:id', (req, res) => {
     });
 });
 
-app.post('/posts', (req, res) => {
-  const requiredFields = ['title', 'content', 'author'];
+app.post('/posts', basicAuth, (req, res) => {
+  const requiredFields = ['title', 'content'];
   for (let i=0; i<requiredFields.length; i++) {
     const field = requiredFields[i];
     if (!(field in req.body)) {
-      const message = `Missing \`${field}\` in request body`
+      const message = `Missing \`${field}\` in request body`;
       console.error(message);
       return res.status(400).send(message);
     }
@@ -54,7 +54,10 @@ app.post('/posts', (req, res) => {
     .create({
       title: req.body.title,
       content: req.body.content,
-      author: req.body.author
+      author: {
+        firstName: req.user.firstName, 
+        lastName: req.user.lastName
+      }
     })
     .then(blogPost => res.status(201).json(blogPost.apiRepr()))
     .catch(err => {
@@ -65,7 +68,7 @@ app.post('/posts', (req, res) => {
 });
 
 
-app.delete('/posts/:id', (req, res) => {
+app.delete('/posts/:id', basicAuth, (req, res) => {
   BlogPost
     .findByIdAndRemove(req.params.id)
     .then(() => {
@@ -78,7 +81,7 @@ app.delete('/posts/:id', (req, res) => {
 });
 
 
-app.put('/posts/:id', (req, res) => {
+app.put('/posts/:id', basicAuth, (req, res) => {
   if (!(req.params.id && req.body.id && req.params.id === req.body.id)) {
     res.status(400).json({
       error: 'Request path id and request body id values must match'
@@ -133,6 +136,9 @@ const basicStrategy = new BasicStrategy((username, password, callback) => {
 
 passport.use(basicStrategy); 
 app.use(passport.initialize()); 
+
+
+
 
 
 app.post('/users', (req, res) => {
