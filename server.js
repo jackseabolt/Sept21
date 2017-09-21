@@ -2,9 +2,11 @@ const bodyParser = require('body-parser');
 const express = require('express');
 const mongoose = require('mongoose');
 const morgan = require('morgan');
+const passport = require('passport'); 
+const {BasicStrategy} = require('passport-http'); 
 
 const {DATABASE_URL, PORT} = require('./config');
-const {BlogPost} = require('./models');
+const {BlogPost, User} = require('./models');
 
 const app = express();
 
@@ -106,6 +108,92 @@ app.delete('/:id', (req, res) => {
     });
 });
 
+const basicStrategy = new BasicStrategy((username, password, callback) => {
+  let user; 
+  User
+    .findOne({username: username})
+    .then(_user => {
+      user = _user; 
+      if(!user){
+        return callback(null, false)
+      }
+      return user.validatePassword(password); 
+    })
+    .then(isValid => {
+      if (!isValid) {
+        return callback(null, false); 
+      }
+      else {
+        return callback(null, user)
+      }
+    })
+    .catch(err => calback(err)); 
+}); 
+
+passport.use(basicStrategy); 
+app.use(passport.initialize()); 
+
+
+app.post('/users', (req, res) => {
+  if(!req.body){
+    return res.restauts(400).json({message: 'No request body'});
+  }
+
+  if(!('username' in req.body)) {
+    return res.status(422).json({message: 'Missing field: username'});
+  }
+
+  let {username, password, firstName, lastName} = req.body; 
+
+  if(typeof username !== 'string') {
+    return res.status(422).json({message: 'Incorrect field type: username'}); 
+  }
+  
+  username = username.trim(); 
+
+  if(username === ''){
+    return res.status(422).json({message: 'Incorrect field length: username'}); 
+  }
+
+  if(!(password)){
+    return res.status(422).json({message: 'Missing field: password'}); 
+  }
+
+  if(typeof password !== 'string'){
+    return res.status(422).json({ message: 'Incorrect field type: password'}); 
+  }
+
+  password = password.trim(); 
+
+  if(password === ''){
+    return res.status(422).json({ message: 'Incorrect field length: password'});
+  }
+
+  return User
+    .find({username})
+    .count()
+    .then(count => {
+      if (count > 0 ){ 
+        return res.status(422).json({message: 'username already taken'})
+      }
+      return User.hashPassword(password)
+    })
+    .then(hash => {
+      return User
+        .create({
+          username: username, 
+          password: hash, 
+          firstName: firstName,
+          lastName: lastName 
+        }); 
+    })
+    .then(user => {
+      return res.status(201).json(user.apiRepr()); 
+    })
+    .catch(err => {
+      res.status(500).json({ message: 'Internal server error'});
+    }); 
+}); 
 
 app.use('*', function(req, res) {
   res.status(404).json({message: 'Not Found'});
@@ -114,6 +202,7 @@ app.use('*', function(req, res) {
 // closeServer needs access to a server object, but that only
 // gets created when `runServer` runs, so we declare `server` here
 // and then assign a value to it in run
+
 let server;
 
 // this function connects to our database, then starts the server
