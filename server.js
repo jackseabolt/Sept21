@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const morgan = require('morgan');
 const passport = require('passport'); 
 const {BasicStrategy} = require('passport-http'); 
+const jwt = require('jsonwebtoken');
 
 const {DATABASE_URL, PORT} = require('./config');
 const {BlogPost, User} = require('./models');
