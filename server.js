@@ -3,12 +3,20 @@ const bodyParser = require('body-parser');
 const express = require('express');
 const mongoose = require('mongoose');
 const morgan = require('morgan');
-const passport = require('passport'); 
-const {BasicStrategy} = require('passport-http'); 
+const passport = require('passport');
+const { BasicStrategy } = require('passport-http');
 const jwt = require('jsonwebtoken');
+const {
+  // Assigns the Strategy export to the name JwtStrategy using object
+  // destructuring
+  // https://developer.mozilla.org/en/docs/Web/JavaScript/Reference/Operators/Destructuring_assignment#Assigning_to_new_variable_names
+  Strategy: JwtStrategy,
+  ExtractJwt
+} = require('passport-jwt');
 
-const {DATABASE_URL, PORT} = require('./config');
-const {BlogPost, User} = require('./models');
+const { DATABASE_URL, PORT, JWT_SECRET, JWT_EXPIRY } = require('./config');
+const { BlogPost, User } = require('./models');
+
 
 const app = express();
 
@@ -16,7 +24,67 @@ app.use(morgan('common'));
 app.use(bodyParser.json());
 
 mongoose.Promise = global.Promise;
-const basicAuth = passport.authenticate('basic', {session: false});
+const basicAuth = passport.authenticate('basic', { session: false });
+
+const createAuthToken = user => {
+  return jwt.sign({ user }, JWT_SECRET, {
+    
+    subject: user.username,
+    expiresIn: JWT_EXPIRY,
+    algorithm: 'HS256'
+  });
+};
+
+const basicStrategy = new BasicStrategy((username, password, callback) => {
+  let user;
+  User.findOne({username: username})
+    .then(_user => {
+      user = _user;
+      if (!user) {
+        // Return a rejected promise so we break out of the chain of .thens.
+        // Any errors like this will be handled in the catch block.
+        return Promise.reject({
+          reason: 'LoginError',
+          message: 'Incorrect username or password'
+        });
+      }
+      return user.validatePassword(password);
+    })
+    .then(isValid => {
+      if (!isValid) {
+        return Promise.reject({
+          reason: 'LoginError',
+          message: 'Incorrect username or password'
+        });
+      }
+      return callback(null, user);
+    })
+    .catch(err => {
+      if (err.reason === 'LoginError') {
+        return callback(null, false, err);
+      }
+      return callback(err, false);
+    });
+});
+
+
+console.log('jwtsecret logging', JWT_SECRET);
+const jwtStrategy = new JwtStrategy(
+  {
+    secretOrKey: JWT_SECRET,
+    // Look for the JWT as a Bearer auth header
+    jwtFromRequest: ExtractJwt.fromAuthHeaderWithScheme('Bearer'),
+    // Only allow HS256 tokens - the same as the ones we issue
+    algorithms: ['HS256']
+  },
+  (payload, done) => {
+    done(null, payload.user);
+  }
+);
+
+passport.use(basicStrategy);
+app.use(passport.initialize());
+passport.use(jwtStrategy);
 
 app.get('/posts', (req, res) => {
   BlogPost
@@ -26,9 +94,15 @@ app.get('/posts', (req, res) => {
     })
     .catch(err => {
       console.error(err);
-      res.status(500).json({error: 'something went terribly wrong'});
+      res.status(500).json({ error: 'something went terribly wrong' });
     });
 });
+
+app.post('/login', basicAuth, (req, res) => {
+  const authToken = createAuthToken(req.user.apiRepr());
+  res.json({authToken});
+} 
+);
 
 app.get('/posts/:id', (req, res) => {
   BlogPost
@@ -36,13 +110,13 @@ app.get('/posts/:id', (req, res) => {
     .then(post => res.json(post.apiRepr()))
     .catch(err => {
       console.error(err);
-      res.status(500).json({error: 'something went horribly awry'});
+      res.status(500).json({ error: 'something went horribly awry' });
     });
 });
 
 app.post('/posts', basicAuth, (req, res) => {
   const requiredFields = ['title', 'content'];
-  for (let i=0; i<requiredFields.length; i++) {
+  for (let i = 0; i < requiredFields.length; i++) {
     const field = requiredFields[i];
     if (!(field in req.body)) {
       const message = `Missing \`${field}\` in request body`;
@@ -56,14 +130,14 @@ app.post('/posts', basicAuth, (req, res) => {
       title: req.body.title,
       content: req.body.content,
       author: {
-        firstName: req.user.firstName, 
+        firstName: req.user.firstName,
         lastName: req.user.lastName
       }
     })
     .then(blogPost => res.status(201).json(blogPost.apiRepr()))
     .catch(err => {
       console.error(err);
-      res.status(500).json({error: 'Something went wrong'});
+      res.status(500).json({ error: 'Something went wrong' });
     });
 
 });
@@ -73,11 +147,11 @@ app.delete('/posts/:id', basicAuth, (req, res) => {
   BlogPost
     .findByIdAndRemove(req.params.id)
     .then(() => {
-      res.status(204).json({message: 'success'});
+      res.status(204).json({ message: 'success' });
     })
     .catch(err => {
       console.error(err);
-      res.status(500).json({error: 'something went terribly wrong'});
+      res.status(500).json({ error: 'something went terribly wrong' });
     });
 });
 
@@ -98,9 +172,9 @@ app.put('/posts/:id', basicAuth, (req, res) => {
   });
 
   BlogPost
-    .findByIdAndUpdate(req.params.id, {$set: updated}, {new: true})
+    .findByIdAndUpdate(req.params.id, { $set: updated }, { new: true })
     .then(updatedPost => res.status(204).end())
-    .catch(err => res.status(500).json({message: 'Something went wrong'}));
+    .catch(err => res.status(500).json({ message: 'Something went wrong' }));
 });
 
 
@@ -113,98 +187,75 @@ app.delete('/:id', (req, res) => {
     });
 });
 
-const basicStrategy = new BasicStrategy((username, password, callback) => {
-  let user; 
-  User
-    .findOne({username: username})
-    .then(_user => {
-      user = _user; 
-      if(!user){
-        return callback(null, false);
-      }
-      return user.validatePassword(password); 
-    })
-    .then(isValid => {
-      if (!isValid) {
-        return callback(null, false); 
-      }
-      else {
-        return callback(null, user);
-      }
-    })
-    .catch(err => callback(err)); 
-}); 
 
-passport.use(basicStrategy); 
-app.use(passport.initialize()); 
 
 
 
 
 
 app.post('/users', (req, res) => {
-  if(!req.body){
-    return res.restauts(400).json({message: 'No request body'});
+  if (!req.body) {
+    return res.restauts(400).json({ message: 'No request body' });
   }
 
-  if(!('username' in req.body)) {
-    return res.status(422).json({message: 'Missing field: username'});
+  if (!('username' in req.body)) {
+    return res.status(422).json({ message: 'Missing field: username' });
   }
 
-  let {username, password, firstName, lastName} = req.body; 
+  let { username, password, firstName, lastName } = req.body;
 
-  if(typeof username !== 'string') {
-    return res.status(422).json({message: 'Incorrect field type: username'}); 
-  }
-  
-  username = username.trim(); 
-
-  if(username === ''){
-    return res.status(422).json({message: 'Incorrect field length: username'}); 
+  if (typeof username !== 'string') {
+    return res.status(422).json({ message: 'Incorrect field type: username' });
   }
 
-  if(!(password)){
-    return res.status(422).json({message: 'Missing field: password'}); 
+  username = username.trim();
+
+  if (username === '') {
+    return res.status(422).json({ message: 'Incorrect field length: username' });
   }
 
-  if(typeof password !== 'string'){
-    return res.status(422).json({ message: 'Incorrect field type: password'}); 
+  if (!(password)) {
+    return res.status(422).json({ message: 'Missing field: password' });
   }
 
-  password = password.trim(); 
+  if (typeof password !== 'string') {
+    return res.status(422).json({ message: 'Incorrect field type: password' });
+  }
 
-  if(password === ''){
-    return res.status(422).json({ message: 'Incorrect field length: password'});
+  password = password.trim();
+
+  if (password === '') {
+    return res.status(422).json({ message: 'Incorrect field length: password' });
   }
 
   return User
-    .find({username})
+    .find({ username })
     .count()
     .then(count => {
-      if (count > 0 ){ 
-        return res.status(422).json({message: 'username already taken'});
+      if (count > 0) {
+        return res.status(422).json({ message: 'username already taken' });
       }
       return User.hashPassword(password);
     })
     .then(hash => {
       return User
         .create({
-          username: username, 
-          password: hash, 
+          username: username,
+          password: hash,
           firstName: firstName,
-          lastName: lastName 
-        }); 
+          lastName: lastName
+        });
     })
     .then(user => {
-      return res.status(201).json(user.apiRepr()); 
+      return res.status(201).json(user.apiRepr());
     })
     .catch(err => {
-      res.status(500).json({ message: 'Internal server error'});
-    }); 
-}); 
+      res.status(500).json({ message: 'Internal server error' });
+    });
+});
 
-app.use('*', function(req, res) {
-  res.status(404).json({message: 'Not Found'});
+app.use('*', function (req, res) {
+  res.status(404).json({ message: 'Not Found' });
 });
 
 // closeServer needs access to a server object, but that only
@@ -214,7 +265,7 @@ app.use('*', function(req, res) {
 let server;
 
 // this function connects to our database, then starts the server
-function runServer(databaseUrl=DATABASE_URL, port=PORT) {
+function runServer(databaseUrl = DATABASE_URL, port = PORT) {
   return new Promise((resolve, reject) => {
     mongoose.connect(databaseUrl, err => {
       if (err) {
@@ -254,4 +305,4 @@ if (require.main === module) {
   runServer().catch(err => console.error(err));
 }
 
-module.exports = {runServer, app, closeServer};
+module.exports = { runServer, app, closeServer };
